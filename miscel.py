@@ -17,26 +17,45 @@ def bbinfo(bbname):
 
     return imwidth, imheight, xmin, ymin, xmax, ymax
 
+
+# Modifying the location coordinates black box since we resized the image!
+
+def newloc(imwidth, imheight, xmin, ymin, xmax, ymax):
+
+    x_scale = 224 / imwidth
+    y_scale = 224 / imheight
+    xminn = int(np.round(xmin * x_scale))
+    xmaxn = int(np.round(xmax * x_scale))
+    yminn = int(np.round(ymin * y_scale))
+    ymaxn = int(np.round(ymax * y_scale))
+
+    return xminn, yminn, xmaxn, ymaxn
+
 # Finding location of highest intensity pixel
 
-def findloc(saliency, imwidth, imheight):
+def findloc(saliency):
     saliency = torch.squeeze(saliency)
     saliency = saliency.cpu().detach().numpy()
-    salresized = cv2.resize(saliency, (imwidth, imheight))
-    xloc,yloc = np.unravel_index(salresized.argmax(), salresized.shape)
+    if saliency.shape != (224, 224):
+        saliency = cv2.resize(saliency, (224, 224))
+    xloc,yloc = np.unravel_index(saliency.argmax(), (224,224))
 
     return xloc, yloc
 
 # Constructing groundtruth bounding box for torchray's pointing game 
-def gtbb(imwidth, imheight, xmin, ymin, xmax, ymax):
-    a = np.zeros((imheight, imwidth))
-    a[ymin:ymax+1, xmin:xmax+1] = 1
-    Y = torch.zeros((imheight, imwidth), dtype=torch.bool)
+def gtbb(xmin, ymin, xmax, ymax):
+   
+    Y = torch.zeros((224, 224), dtype=torch.bool)
     Y[ymin:ymax+1, xmin:xmax+1]=True
-    return Y, a
+    return Y
 
 def sares(saliency, imwidth, imheight):
     saliency = torch.squeeze(saliency)
     saliency = saliency.cpu().detach().numpy()
     salresized = cv2.resize(saliency, (imwidth, imheight))
     return salresized
+# Normalize between 0 and 1
+def normlze(saliency):
+    nmlized = (saliency - saliency.min()) /saliency.max()
+    return nmlized
+
