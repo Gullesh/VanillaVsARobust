@@ -91,6 +91,8 @@ def mp(model, img, label, maxiteration):
     else:
         upsample = torch.nn.UpsamplingBilinear2d(size=(224, 224))
     optimizer = torch.optim.Adam([mask], lr=learning_rate)
+    target = torch.nn.Softmax(dim=1)(model(img))
+    category = np.argmax(target.cpu().data.numpy())
     start = time.time()
     for i in range(maxiteration):
         upsampled_mask = upsample(mask)
@@ -109,7 +111,7 @@ def mp(model, img, label, maxiteration):
 
         outputs = torch.nn.Softmax(dim=1)(model(perturbated_input))
         loss = l1_coeff*torch.mean(torch.abs(1 - mask)) + \
-                tv_coeff*tv_norm(mask, tv_beta) + outputs[0, label]
+                tv_coeff*tv_norm(mask, tv_beta) + outputs[0, category]
 
         optimizer.zero_grad()
         loss.backward()
