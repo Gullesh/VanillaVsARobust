@@ -45,6 +45,17 @@ def loadResnet():
 
     return model
 
+def loadAlexnet():
+    model = models.alexnet(pretrained=True)
+    model.eval()
+    if use_cuda:
+        model.cuda()
+
+    for p in model.parameters():
+        p.requires_grad = False
+
+    return model
+
 def loadResnetR():
     model = load_madry_model(arch='madry', my_attacker=True)
     return model

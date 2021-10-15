@@ -5,8 +5,8 @@ import numpy as np
 import cv2
 
 # Obtaining groundtruth bounding box info
-def bbinfo(bbname):
-    tree = ET.parse('/home/mallet/Desktop/VanillaVsARobust/bb/'+ bbname + '.xml')
+def bbinfo(bbname, bd):
+    tree = ET.parse(bd+ bbname + '.xml')
     root = tree.getroot()
     imwidth = int(root[3][0].text)
     imheight = int(root[3][1].text)
@@ -59,3 +59,26 @@ def normlze(saliency):
     nmlized = (saliency - saliency.min()) /saliency.max()
     return nmlized
 
+def gradfindloc(grayscale_cam):
+    saliency = grayscale_cam[0, :]
+    if saliency.shape != (224, 224):
+        saliency = cv2.resize(saliency, (224, 224))
+    xloc,yloc = np.unravel_index(saliency.argmax(), (224,224))
+
+    return xloc, yloc
+
+def bCAM(feature_conv, weight_softmax, idx):
+    # generate the class activation maps upsample to 256x256
+    _, nc, h, w = feature_conv.shape
+    cam = weight_softmax[idx].dot(feature_conv.reshape((nc, h*w)))
+    cam = cam.reshape(h, w)
+    cam = cam - np.min(cam)
+    cam_img = cam / np.max(cam)
+    return cam_img
+
+def camfindloc(saliency):
+    if saliency.shape != (224, 224):
+        saliency = cv2.resize(saliency, (224, 224))
+    xloc,yloc = np.unravel_index(saliency.argmax(), (224,224))
+
+    return xloc, yloc

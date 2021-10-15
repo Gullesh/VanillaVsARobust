@@ -18,13 +18,9 @@ def tv_norm(input, tv_beta):
     return row_grad + col_grad
 
 def preprocess_image(img):
-    means=[0.485, 0.456, 0.406]
-    stds=[0.229, 0.224, 0.225]
+
 
     preprocessed_img = img.copy()[: , :, ::-1]
-    for i in range(3):
-        preprocessed_img[:, :, i] = preprocessed_img[:, :, i] - means[i]
-        preprocessed_img[:, :, i] = preprocessed_img[:, :, i] / stds[i]
     preprocessed_img = np.ascontiguousarray(np.transpose(preprocessed_img, (2, 0, 1)))
 
     if use_cuda:
