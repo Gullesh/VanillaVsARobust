@@ -10,14 +10,18 @@ import time
 from numpy import savetxt
 import argparse
 from alexp import *
+import torch.nn.functional as F
 import alx
 import alexp
 from torchray.attribution.extremal_perturbation import extremal_perturbation, contrastive_reward, simple_reward
-from torchray.attribution.grad_cam import grad_cam
+from pytorch_grad_cam import GradCAM
 from captum.attr import IntegratedGradients
 from torchray.attribution.rise import rise
 from lime import lime_image
-
+import shap
+from RISE.explanations import RISE
+from RISE.utils import *
+from lime.wrappers.scikit_image import SegmentationAlgorithm
 
 model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr']
 method_options = ['gradient', 'mp','ep', 'gradcam', 'rise','ig', 'rise', 'lime','shap']
@@ -36,6 +40,7 @@ args = parser.parse_args()
 
 if args.model == 'alexnetr':
     model = alx.alexr()
+    model.eval()
     target_layer = model.model.features[11]
 
 else:
@@ -243,45 +248,55 @@ elif args.method == 'ig':
         elif pg==-1:
             pgmiss+=1
 
+
 elif args.method == 'rise':
     # Transforms needs to be applied to our data set
     val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])    
     # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
     vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
 
+    # Rise initialization 
+    explainer = RISE(model, (224, 224),100)
+    explainer.generate_masks(N=8000, s=7, p1=0.5, savepath='masks.npy')
 
     # number of images we need to calculate things for
     nimg = vall.selection
-    for i in nimg:
-        img, labele = vall[i]
-        bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
-        imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
-        xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
-        x = img.unsqueeze(0)
-        x = x.cuda()
-        start = time.time()
-        saliency = rise(model, x)
-        saliency = saliency[:, labele].unsqueeze(0)
-        end = time.time()
-        tm = end - start
-        ttotal = ttotal + tm
-        z = saliency, labele, bbname
-        lslb.append(z)
-        l.append(tm)
-        #saliency = miscel.normlze(saliency)
-        xloc,yloc = miscel.findloc(saliency)
-        Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
-        pg = test.evaluate(Y, (yloc,xloc))
-        if pg==1:
-            pghits+=1
-        elif pg==-1:
-            pgmiss+=1
+    with torch.no_grad():
+
+        for i in nimg:
+            img, labele = vall[i]
+            bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+            imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+            xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+            x = img.unsqueeze(0)
+            x = x.cuda()
+            start = time.time()
+            saliency = explainer(x)
+
+            sal = saliency[labele].cpu().numpy()
+            
+            end = time.time()
+            tm = end - start
+            ttotal = ttotal + tm
+            z = sal, labele, bbname
+            lslb.append(z)
+            l.append(tm)
+            #saliency = miscel.normlze(saliency)
+            xloc,yloc = miscel.camfindloc(sal)
+            Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+            pg = test.evaluate(Y, (yloc,xloc))
+            if pg==1:
+                pghits+=1
+            elif pg==-1:
+                pgmiss+=1
+            del sal
+            del saliency
+
 elif args.method == 'lime':
 
     def get_preprocess_transform():    
         transf = transforms.Compose([
-            transforms.ToTensor()
-        ])    
+            transforms.ToTensor()])    
 
         return transf
 
@@ -306,6 +321,10 @@ elif args.method == 'lime':
 
     # Method
     explainer = lime_image.LimeImageExplainer()
+    slic_parameters = {'n_segments': 50,
+                   'compactness': 10,
+                   'sigma': 3}
+    segmenter = SegmentationAlgorithm('slic', **slic_parameters)
 
     # number of images we need to calculate things for
     nimg = vall.selection
@@ -318,28 +337,88 @@ elif args.method == 'lime':
         start = time.time()
         explanation = explainer.explain_instance(np.array(img), 
                                                 batch_predict, # classification function
-                                                labels = labele,
-                                                top_labels=None,  
-                                                num_samples=1000)
-        _, mask = explanation.get_image_and_mask(label=labele, positive_only=False, num_features=5, negative_only=False, hide_rest=False)
+                                                labels = (labele,),
+                                                hide_color=0,
+                                                segmentation_fn=segmenter,
+                                                top_labels= None,  
+                                                num_samples=1000,progress_bar=False)
+        sgments = explanation.segments
+        hetmap = np.zeros(sgments.shape)
+        local_exp = explanation.local_exp
+        locexp = local_exp[labele]
+
+        for i, (seg_idx, seg_val) in enumerate(locexp):
+            hetmap[sgments == seg_idx] = seg_val
 
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
-        z = mask, labele, bbname
+        z = hetmap, labele, bbname
+        lslb.append(z)
+        l.append(tm)
+        xcen = int(np.floor((xmaxn+xminn)/2))
+        ycen = int(np.floor((ymaxn+yminn)/2))
+        pgalt = hetmap[ycen, xcen]==hetmap.max()
+        #saliency = miscel.normlze(saliency)
+        xloc,yloc = miscel.camfindloc(hetmap)
+        Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+        pg = test.evaluate(Y, (yloc,xloc))
+        if pg==1 or pgalt:
+            pghits+=1
+        elif pg==-1:
+            pgmiss+=1
+
+
+elif args.method == 'shap':
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])    
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    def normalize(image):
+        if image.max() > 1:
+            image /= 255
+        image = (image - mean) / std
+        # in addition, roll the axis so that they suit pytorch
+        return torch.tensor(image.swapaxes(-1, 1).swapaxes(2, 3)).float().cuda()
+    # Method
+    X,_ = shap.datasets.imagenet50()
+    e = shap.GradientExplainer(model, normalize(X))
+
+
+    # number of images we need to calculate things for
+    nimg = vall.selection
+    for i in nimg:
+        img, labele = vall[i]
+        bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+        imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+        xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+        x = img.unsqueeze(0)
+        x = x.cuda()
+        outputs = model(x)
+        _, ind = outputs[0].sort(descending=True)
+        c = ((ind == labele).nonzero(as_tuple=False)).item()
+        start = time.time()
+        shap_values,_ = e.shap_values(x, ranked_outputs=c+1, nsamples=100)
+        d = torch.from_numpy(shap_values[-1])
+        saliency = torch.mean(d, 1,keepdim=True)
+        end = time.time()
+        tm = end - start
+        ttotal = ttotal + tm
+        z = saliency, labele, bbname
         lslb.append(z)
         l.append(tm)
         #saliency = miscel.normlze(saliency)
-        xloc,yloc = miscel.camfindloc(mask)
+        xloc,yloc = miscel.findloc(saliency)
         Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
         pg = test.evaluate(Y, (yloc,xloc))
         if pg==1:
             pghits+=1
         elif pg==-1:
             pgmiss+=1
-
-
-
+    
 torch.save(lslb, '/home/mallet/Desktop/Dataa/salmaps/'+args.method +args.model+args.data+'sal.pt')
 l = np.asarray(l)     
 savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'.csv', l, delimiter=',')
