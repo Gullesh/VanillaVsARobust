@@ -20,9 +20,17 @@ from captum.attr import IntegratedGradients
 from lime import lime_image
 import shap
 from RISE.explanations import RISE
-from RISE.utils import *
 from lime.wrappers.scikit_image import SegmentationAlgorithm
+from RISE.utils import *
+from RISE.evaluation import CausalMetric, auc, gkern
+import torch.backends.cudnn as cudnn
+from torch.nn.functional import conv2d
+import torch.nn as nn
+import numpy
 from scipy.stats.stats import pearsonr   
+
+cudnn.benchmark = True
+
 
 
 model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr']
@@ -41,8 +49,8 @@ args = parser.parse_args()
 # Loading model
 if args.model == 'resnet50':
     model = lm.loadResnet()
-    target_layer = model.layer4
-    modulll = model._modules.get('layer4')
+    target_layer = model[0].layer4
+    modulll = model._modules.get('0')._modules.get('layer4')
     params = list(model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
@@ -50,15 +58,15 @@ elif args.model == 'vgg16':
     model = lm.loadvgg()
 elif args.model == 'resnet50r':
     model = lm.loadResnetR()
-    target_layer = model.model.layer4
-    modulll = model._modules.get('model')._modules.get('layer4')
-    params = list(model.model.parameters())
+    target_layer = model[0].model.layer4
+    modulll = model._modules.get('0')._modules.get('model')._modules.get('layer4')
+    params = list(model[0].model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
     
 elif args.model == 'googlenet':
     model = lm.loadgoogle()
-    target_layer = model.inception5b
-    modulll = model._modules.get('inception5b')
+    target_layer = model[0].inception5b
+    modulll = model._modules.get('0')._modules.get('inception5b')
     params = list(model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
@@ -66,9 +74,9 @@ elif args.model == 'googlenet':
 elif args.model == 'googlenetr':
     model = lm.loadgoogleR()
     model.eval()
-    target_layer = model.model.inception5b
-    modulll = model._modules.get('model')._modules.get('inception5b')
-    params = list(model.model.parameters())
+    target_layer = model[0].model.inception5b
+    modulll = model._modules.get('0')._modules.get('model')._modules.get('inception5b')
+    params = list(model[0].model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 elif args.model == 'alexnet':
     model = lm.loadAlexnet()
@@ -104,23 +112,24 @@ else:
     print('Error: please choose a valid data')
  
 tol = args.tol
-# Initializing number of hits in pointing game and total time
-ttotal = 0
-pghits = 0
-pgmiss = 0
-test = torchray.benchmark.pointing_game.PointingGame(1000, tolerance=tol)
 
 #lists for confidences and metrics
 confid = []
 metri1 = []
 metri2 = []
 
-# Initializing list for runtime
-l = []
+# Parameters to use for insertion and deletion
+klen = 11
+ksig = 5
+kern = gkern(klen, ksig)
 
-# initializing list for saliency maps, labels, bbname
-lslb = []
+# Function that blurs input image
+blur = lambda x: nn.functional.conv2d(x, kern, padding=klen//2)
 
+insertion = CausalMetric(model, 'ins', 224*8, substrate_fn=blur)
+deletion = CausalMetric(model, 'del', 224*8, substrate_fn=torch.zeros_like)
+delvals = []
+inservals = []
 
 if args.method == 'gradient':
     # Transforms needs to be applied to our data set
@@ -130,23 +139,22 @@ if args.method == 'gradient':
     vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
     # number of images we need to calculate things for
     nimg = vall.selection
+    
     for i in nimg:
         img, labele = vall[i]
-        bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
-        imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
-        xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
-        x = img.unsqueeze(0).cuda()
-        saliency = gradient(model, x, labele)
-        z = saliency, labele, bbname
-        lslb.append(z)
-        sal = torch.squeeze(saliency).cpu().detach().numpy()
-        Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
-        maxmat = sal == sal.max()
-        hit = (torch.from_numpy(maxmat) & Y).view(-1).any()
-        if hit:
-            pghits+=1
-        else:
-            pgmiss+=1
+        yy = img.unsqueeze(0)
+        y = yy.cuda()
+        prob = model(y)
+        conf, predicted = torch.max(prob, 1)
+        confid.append(conf.item())
+        saliency = gradient(model, y, predicted.item())
+        saliency = torch.squeeze(saliency).cpu().detach().numpy()
+        sal = miscel.normlze(saliency)
+        deleti = deletion.single_run(yy, sal)
+        inseri = insertion.single_run(yy, sal)
+        delvals.append(auc(deleti))
+        inservals.append(auc(inseri))
+        
 
 
 elif args.method == 'mp':
@@ -157,25 +165,22 @@ elif args.method == 'mp':
     vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
     # number of images we need to calculate things for
     nimg = vall.selection
-
+    valtransforms = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])]) 
     for i in nimg:
         
         img, labele = vall[i]     
-        bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
-    
-        imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
-
-        xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
-        _, saliency = exp.mp(model, img, labele, args.mpiteration)
-        z = saliency, labele, bbname
-        lslb.append(z)
-        xloc,yloc = miscel.findloc(saliency)
-        Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
-        pg = test.evaluate(Y, (yloc,xloc))
-        if pg==1:
-            pghits+=1
-        elif pg==-1:
-            pgmiss+=1
+        yy = valtransforms(img).unsqueeze(0)
+        y = yy.cuda()
+        prob = model(y)
+        conf, predicted = torch.max(prob, 1)
+        confid.append(conf.item())
+        _, saliency = exp.mp(model, img, predicted.item(), args.mpiteration)
+        saliency = torch.squeeze(saliency).cpu().detach().numpy()
+        saliency = miscel.normlze(saliency)
+        deleti = deletion.single_run(yy, saliency)
+        inseri = insertion.single_run(yy, saliency)
+        delvals.append(auc(deleti))
+        inservals.append(auc(inseri))
 
 elif args.method == 'ep':
     # Transforms needs to be applied to our data set
@@ -197,7 +202,7 @@ elif args.method == 'ep':
         x = img.unsqueeze(0)
         x = x.cuda()
         start = time.time()
-        saliency, _ = extremal_perturbation(model, x, labele, reward_func=simple_reward, debug=False, areas=[0.025, 0.05, 0.1, 0.2],smooth=0.09,perturbation='blur')
+        saliency, _ = extremal_perturbation(model, x, labele, reward_func=simple_reward, debug=False, areas=[0.025, 0.05, 0.1],smooth=0.09,perturbation='blur')
         end = time.time()
         tm = end - start
         mask = saliency.sum(dim=0, keepdim=True)
@@ -232,26 +237,19 @@ elif args.method == 'gradcam':
     nimg = vall.selection
     for i in nimg:
         img, labele = vall[i]
-        x = img.unsqueeze(0)
-        x = x.cuda()
-        bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
-        imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
-        xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
-        start = time.time()
-        saliency = cam(input_tensor=x, target_category=labele)
-        end = time.time()
-        tm = end - start
-        ttotal = ttotal + tm
-        z = saliency, labele, bbname
-        lslb.append(z)
-        l.append(tm)
-        xloc,yloc = miscel.gradfindloc(saliency)
-        Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
-        pg = test.evaluate(Y, (yloc,xloc))
-        if pg==1:
-            pghits+=1
-        elif pg==-1:
-            pgmiss+=1
+        yy = img.unsqueeze(0)
+        y = yy.cuda()
+        prob = model(y)
+        conf, predicted = torch.max(prob, 1)
+        confid.append(conf.item())
+        saliency = cam(input_tensor=y, target_category=predicted.item())
+        saliency = np.squeeze(saliency)
+        saliency = miscel.normlze(saliency)
+        deleti = deletion.single_run(yy, saliency)
+        inseri = insertion.single_run(yy, saliency)
+        delvals.append(auc(deleti))
+        inservals.append(auc(inseri))
+
 
 elif args.method == 'cam':
     # Transforms needs to be applied to our data set
@@ -502,9 +500,16 @@ elif args.method == 'shap':
         elif pg==-1:
             pgmiss+=1
 
-torch.save(lslb, '/media/mallet/Haniye/cams/'+args.method +args.model+args.data+'sal.pt')
-#l = np.asarray(l)     
-#savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'.csv', l, delimiter=',')
-print('Pointing game accuracy: ',pghits/(pghits+pgmiss))
-print('Total time: ',ttotal)
-print('hits and misses: ', pghits, pgmiss)
+inserr = numpy.array(inservals)
+delett = numpy.array(delvals)
+
+#confid = confid.cpu().detach().numpy()
+print('Mean and std of insertion game: ', "%.4f" % (numpy.mean(inserr)) +u"\u00B1"+"%.4f" % (numpy.std(inserr)))
+print('Mean and std of deletion game: ',"%.4f" % (numpy.mean(delett))  +u"\u00B1"+"%.4f" % (numpy.std(delett)))
+insercor, ـ = pearsonr(inservals, confid)
+delcor, ـ = pearsonr(delvals, confid)
+print('correlation and p-value of insertion and confidence: ', "%.2f" % insercor)
+print('correlation and p-value of deletion and confidence: ', "%.2f" % delcor)
+
+
+

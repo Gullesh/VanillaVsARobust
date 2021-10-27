@@ -7,6 +7,7 @@ import os
 sys.path.append('/home/mallet/Desktop/sam')
 os.chdir('/home/mallet/Desktop/sam')
 from sam.utils import load_madry_model
+import torch.nn as nn
 
 use_cuda = torch.cuda.is_available()
 
@@ -14,6 +15,7 @@ use_cuda = torch.cuda.is_available()
 
 def loadgoogle():
     model = models.googlenet(pretrained=True)
+    #model = nn.Sequential(model, nn.Softmax(dim=1))
     model.eval()
     if use_cuda:
         model.cuda()
@@ -36,6 +38,7 @@ def loadvgg():
 
 def loadResnet():
     model = models.resnet50(pretrained=True)
+    #model = nn.Sequential(model, nn.Softmax(dim=1))
     model.eval()
     if use_cuda:
         model.cuda()
@@ -47,6 +50,7 @@ def loadResnet():
 
 def loadAlexnet():
     model = models.alexnet(pretrained=True)
+    #model = nn.Sequential(model, nn.Softmax(dim=1))
     model.eval()
     if use_cuda:
         model.cuda()
@@ -57,9 +61,22 @@ def loadAlexnet():
     return model
 
 def loadResnetR():
-    model = load_madry_model(arch='madry', my_attacker=True)
+    model = load_madry_model(arch='madry', if_pre=1, my_attacker=True)
+    model.eval()
+    if use_cuda:
+        model.cuda()
+
+    for p in model.parameters():
+        p.requires_grad = False
+
     return model
 
 def loadgoogleR():
-    model = load_madry_model(arch='madry_googlenet', my_attacker=True)
+    model = load_madry_model(arch='madry_googlenet', if_pre=1, my_attacker=True)
+    model.eval()
+    if use_cuda:
+        model.cuda()
+
+    for p in model.parameters():
+        p.requires_grad = False
     return model

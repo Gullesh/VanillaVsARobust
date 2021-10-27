@@ -56,7 +56,7 @@ def sares(saliency, imwidth, imheight):
     return salresized
 # Normalize between 0 and 1
 def normlze(saliency):
-    nmlized = (saliency - saliency.min()) /saliency.max()
+    nmlized = (saliency - saliency.min()) /(saliency.max() - saliency.min())
     return nmlized
 
 def gradfindloc(grayscale_cam):
