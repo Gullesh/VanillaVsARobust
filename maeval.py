@@ -49,8 +49,8 @@ args = parser.parse_args()
 # Loading model
 if args.model == 'resnet50':
     model = lm.loadResnet()
-    target_layer = model[0].layer4
-    modulll = model._modules.get('0')._modules.get('layer4')
+    target_layer = model.layer4
+    modulll = model._modules.get('layer4')
     params = list(model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
@@ -58,15 +58,15 @@ elif args.model == 'vgg16':
     model = lm.loadvgg()
 elif args.model == 'resnet50r':
     model = lm.loadResnetR()
-    target_layer = model[0].model.layer4
-    modulll = model._modules.get('0')._modules.get('model')._modules.get('layer4')
-    params = list(model[0].model.parameters())
+    target_layer = model.model.layer4
+    modulll = model._modules.get('model')._modules.get('layer4')
+    params = list(model.model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
     
 elif args.model == 'googlenet':
     model = lm.loadgoogle()
-    target_layer = model[0].inception5b
-    modulll = model._modules.get('0')._modules.get('inception5b')
+    target_layer = model.inception5b
+    modulll = model._modules.get('inception5b')
     params = list(model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
@@ -74,13 +74,13 @@ elif args.model == 'googlenet':
 elif args.model == 'googlenetr':
     model = lm.loadgoogleR()
     model.eval()
-    target_layer = model[0].model.inception5b
-    modulll = model._modules.get('0')._modules.get('model')._modules.get('inception5b')
-    params = list(model[0].model.parameters())
+    target_layer = model.model.inception5b
+    modulll = model._modules.get('model')._modules.get('inception5b')
+    params = list(model.model.parameters())
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 elif args.model == 'alexnet':
     model = lm.loadAlexnet()
-    target_layer = model[0].features[11]
+    target_layer = model.features[11]
 
 else:
     print('Error: please choose a valid model')
@@ -147,6 +147,7 @@ if args.method == 'gradient':
         prob = model(y)
         conf, predicted = torch.max(prob, 1)
         confid.append(conf.item())
+        print(torch.max(prob, 1))
         saliency = gradient(model, y, predicted.item())
         saliency = torch.squeeze(saliency).cpu().detach().numpy()
         sal = miscel.normlze(saliency)

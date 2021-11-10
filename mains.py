@@ -10,7 +10,6 @@ import loadmodel as lm
 import time
 from numpy import savetxt
 import argparse
-import gc
 from exp import *
 import exp
 from pytorch_grad_cam import GradCAM
@@ -23,6 +22,7 @@ from RISE.explanations import RISE
 from RISE.utils import *
 from lime.wrappers.scikit_image import SegmentationAlgorithm
 from scipy.stats.stats import pearsonr   
+import torch.nn as nn
 
 
 model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr']
@@ -72,7 +72,7 @@ elif args.model == 'googlenetr':
     weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 elif args.model == 'alexnet':
     model = lm.loadAlexnet()
-    target_layer = model[0].features[11]
+    target_layer = model.features[11]
 
 else:
     print('Error: please choose a valid model')
@@ -150,7 +150,8 @@ if args.method == 'gradient':
 
 
 elif args.method == 'mp':
-
+    model = nn.Sequential(model, nn.Softmax(dim=1))
+    model = model.eval()
     # Transforms needs to be applied to our data set
     val_transforms = transforms.Compose([transforms.Resize((224,224))])    
     # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
@@ -310,7 +311,9 @@ elif args.method == 'ig':
         x = x.cuda()
         start = time.time()
         attributions = ig.attribute(x, target=labele)
-        saliency = torch.mean(attributions, 1,keepdim=True)
+        #saliency = torch.mean(attributions, 1,keepdim=True)
+        saliency,_ = torch.max(attributions, 1,keepdim=True)
+
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
@@ -486,7 +489,8 @@ elif args.method == 'shap':
         start = time.time()
         shap_values,_ = e.shap_values(x, ranked_outputs=c+1, nsamples=100)
         d = torch.from_numpy(shap_values[-1])
-        saliency = torch.mean(d, 1,keepdim=True)
+        #saliency = torch.mean(d, 1,keepdim=True)
+        saliency,_ = torch.max(d, 1,keepdim=True)
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
@@ -502,7 +506,7 @@ elif args.method == 'shap':
         elif pg==-1:
             pgmiss+=1
 
-torch.save(lslb, '/media/mallet/Haniye/cams/'+args.method +args.model+args.data+'sal.pt')
+torch.save(lslb, '/media/mallet/Haniye/cams/'+args.method +args.model+args.data+str(args.mpiteration)+'sal.pt')
 #l = np.asarray(l)     
 #savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'.csv', l, delimiter=',')
 print('Pointing game accuracy: ',pghits/(pghits+pgmiss))

@@ -45,7 +45,7 @@ args = parser.parse_args()
 if args.model == 'alexnetr':
     model = alx.alexr()
     model.eval()
-    target_layer = model[0].model.features[11]
+    target_layer = model.model.features[11]
 
 else:
     print('Error: please choose a valid model')
@@ -239,7 +239,8 @@ elif args.method == 'ig':
         x = x.cuda()
         start = time.time()
         attributions = ig.attribute(x, target=labele)
-        saliency = torch.mean(attributions, 1,keepdim=True)
+        #saliency = torch.mean(attributions, 1,keepdim=True)
+        saliency,_ = torch.max(attributions, 1,keepdim=True)
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
@@ -445,7 +446,8 @@ elif args.method == 'shap':
         start = time.time()
         shap_values,_ = e.shap_values(x, ranked_outputs=c+1, nsamples=100)
         d = torch.from_numpy(shap_values[-1])
-        saliency = torch.mean(d, 1,keepdim=True)
+        #saliency = torch.mean(d, 1,keepdim=True)
+        saliency,_ = torch.max(d, 1,keepdim=True)
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
@@ -461,7 +463,7 @@ elif args.method == 'shap':
         elif pg==-1:
             pgmiss+=1
     
-#torch.save(lslb, '/home/mallet/Desktop/Dataa/salmaps/'+args.method +args.model+args.data+'sal.pt')
+torch.save(lslb, '/home/mallet/Desktop/Dataa/salmaps/'+args.method +args.model+args.data+'sal.pt')
 #l = np.asarray(l)     
 #savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'.csv', l, delimiter=',')
 print('Pointing game accuracy: ',pghits/(pghits+pgmiss))
