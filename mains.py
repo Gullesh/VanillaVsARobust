@@ -14,7 +14,7 @@ from exp import *
 import exp
 from pytorch_grad_cam import GradCAM
 import torch.nn.functional as F
-from torchray.attribution.extremal_perturbation import extremal_perturbation, contrastive_reward, simple_reward
+from torchray.attribution.extremal_perturbation import extremal_perturbation, simple_reward
 from captum.attr import IntegratedGradients
 from lime import lime_image
 import shap
@@ -25,9 +25,9 @@ from scipy.stats.stats import pearsonr
 import torch.nn as nn
 
 
-model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr']
-method_options = ['gradient', 'mp','ep', 'gradcam', 'rise', 'cam','ig', 'rise', 'lime','shap']
-data_options = ['rnddata', 'rsnt', 'ggl', 'alx','subalx', 'subrsnt', 'subggl']
+model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr','mobilenetV3']
+method_options = ['gradient', 'mp','ep', 'gradcam', 'rise', 'cam','ig', 'rise', 'lime','shap','riser','epp','mpp','lie']
+data_options = ['rnddata', 'rsnt', 'ggl', 'alx','subalx', 'subrsnt', 'subggl','hyp']
 
 parser = argparse.ArgumentParser(description='CNN')
 
@@ -41,38 +41,44 @@ args = parser.parse_args()
 # Loading model
 if args.model == 'resnet50':
     model = lm.loadResnet()
-    target_layer = model.layer4
-    modulll = model._modules.get('layer4')
-    params = list(model.parameters())
-    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+    #target_layer = model.layer4
+    #modulll = model._modules.get('layer4')
+    #params = list(model.parameters())
+    #weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
 elif args.model == 'vgg16':
     model = lm.loadvgg()
 elif args.model == 'resnet50r':
     model = lm.loadResnetR()
-    target_layer = model.model.layer4
-    modulll = model._modules.get('model')._modules.get('layer4')
-    params = list(model.model.parameters())
-    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
-    
+    #target_layer = model.model.layer4
+    #modulll = model._modules.get('model')._modules.get('layer4')
+    #params = list(model.model.parameters())
+    #weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+elif args.model == 'mobilenetV3':
+    model = lm.loadmobile()
+    #target_layer = model.model.layer4
+    #modulll = model._modules.get('model')._modules.get('layer4')
+    #params = list(model.model.parameters())
+    #weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+
 elif args.model == 'googlenet':
     model = lm.loadgoogle()
-    target_layer = model.inception5b
-    modulll = model._modules.get('inception5b')
-    params = list(model.parameters())
-    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+    #target_layer = model.inception5b
+    #modulll = model._modules.get('inception5b')
+    #params = list(model.parameters())
+    #weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 
 
 elif args.model == 'googlenetr':
     model = lm.loadgoogleR()
     model.eval()
-    target_layer = model.model.inception5b
-    modulll = model._modules.get('model')._modules.get('inception5b')
-    params = list(model.model.parameters())
-    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+    #target_layer = model.model.inception5b
+    #modulll = model._modules.get('model')._modules.get('inception5b')
+    #params = list(model.model.parameters())
+    #weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
 elif args.model == 'alexnet':
     model = lm.loadAlexnet()
-    target_layer = model.features[11]
+    #target_layer = model.features[11]
 
 else:
     print('Error: please choose a valid model')
@@ -99,6 +105,9 @@ elif args.data == 'subggl':
 elif args.data == 'subrsnt':
     dta = '/home/mallet/Desktop/Dataa/subrsnt/valid'
     bdta = '/home/mallet/Desktop/Dataa/subrsnt/val/'
+elif args.data == 'hyp':
+    dta = '/home/mallet/Desktop/Dataa/hyp/valid'
+    bdta = '/home/mallet/Desktop/Dataa/hyp/val/'
 
 else:
     print('Error: please choose a valid data')
@@ -136,7 +145,12 @@ if args.method == 'gradient':
         imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
         xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
         x = img.unsqueeze(0).cuda()
+        start = time.time()
         saliency = gradient(model, x, labele)
+        end = time.time()
+        tm = end - start
+        ttotal = ttotal + tm
+        l.append(tm)
         z = saliency, labele, bbname
         lslb.append(z)
         sal = torch.squeeze(saliency).cpu().detach().numpy()
@@ -149,9 +163,45 @@ if args.method == 'gradient':
             pgmiss+=1
 
 
+elif args.method == 'mpp':
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224))])    
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+    # number of images we need to calculate things for
+    nimg = vall.selection
+    iter = [10, 50, 200, 400]
+    for j in iter:
+        pghits = 0
+        pgmiss = 0
+
+        for i in nimg:
+            
+            img, labele = vall[i]     
+            bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+        
+            imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+
+            xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+            start = time.time()
+            _, saliency = exp.mp(model, img, labele, j)
+            end = time.time()
+            tm = end - start
+            ttotal = ttotal + tm
+            l.append(tm)
+            z = saliency, labele, bbname
+            lslb.append(z)
+            xloc,yloc = miscel.findloc(saliency)
+            Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+            pg = test.evaluate(Y, (yloc,xloc))
+            if pg==1:
+                pghits+=1
+            elif pg==-1:
+                pgmiss+=1
+        print('iterations:  ', j)
+        print('hits and miss: ',pghits, pgmiss)
+
 elif args.method == 'mp':
-    model = nn.Sequential(model, nn.Softmax(dim=1))
-    model = model.eval()
     # Transforms needs to be applied to our data set
     val_transforms = transforms.Compose([transforms.Resize((224,224))])    
     # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
@@ -167,7 +217,12 @@ elif args.method == 'mp':
         imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
 
         xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+        start = time.time()
         _, saliency = exp.mp(model, img, labele, args.mpiteration)
+        end = time.time()
+        tm = end - start
+        ttotal = ttotal + tm
+        l.append(tm)
         z = saliency, labele, bbname
         lslb.append(z)
         xloc,yloc = miscel.findloc(saliency)
@@ -180,11 +235,11 @@ elif args.method == 'mp':
 
 elif args.method == 'ep':
     # Transforms needs to be applied to our data set
-    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),
-                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])])  
+    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])  
     # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
     vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
-
+    maxiter = 400
+    ars = [0.012, 0.025, 0.05, 0.1, 0.2]
 
     # number of images we need to calculate things for
     nimg = vall.selection
@@ -198,7 +253,7 @@ elif args.method == 'ep':
         x = img.unsqueeze(0)
         x = x.cuda()
         start = time.time()
-        saliency, _ = extremal_perturbation(model, x, labele, reward_func=simple_reward, debug=False, areas=[0.025, 0.05, 0.1, 0.2],smooth=0.09,perturbation='blur')
+        saliency, _ = extremal_perturbation(model, x, labele, reward_func=simple_reward, max_iter=maxiter,debug=False, areas=ars,smooth=0.09,perturbation='blur')
         end = time.time()
         tm = end - start
         mask = saliency.sum(dim=0, keepdim=True)
@@ -213,7 +268,51 @@ elif args.method == 'ep':
             pghits+=1
         elif pg==-1:
             pgmiss+=1
+    print('max iteration: ', maxiter)
+    print('areas: ', ars)
 
+elif args.method == 'epp':
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])])  
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+
+    arss = [[0.05, 0.1], [0.02, 0.08, 0.16],[0.05, 0.15, 0.3],[0.025, 0.05, 0.1, 0.2], [0.012, 0.025, 0.05, 0.1, 0.2], [0.012, 0.025, 0.05, 0.1, 0.2, 0.4],[0.015, 0.03, 0.05, 0.1, 0.25, 0.5],[0.01, 0.04, 0.05, 0.1, 0.2, 0.4]]
+    for j in arss:
+        pghits = 0
+        pgmiss = 0
+        ars = j
+        # number of images we need to calculate things for
+        nimg = vall.selection
+            
+        for i in nimg:
+            img, labele = vall[i]
+            bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+            imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+            xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+    
+            x = img.unsqueeze(0)
+            x = x.cuda()
+            start = time.time()
+            saliency, _ = extremal_perturbation(model, x, labele, reward_func=simple_reward,max_iter=800, debug=False, areas=ars,smooth=0.09,perturbation='blur')
+            end = time.time()
+            tm = end - start
+            mask = saliency.sum(dim=0, keepdim=True)
+            ttotal = ttotal + tm
+            z = mask, labele, bbname
+            lslb.append(z)
+            l.append(tm)
+            xloc,yloc = miscel.findloc(mask)
+            Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+            pg = test.evaluate(Y, (yloc,xloc))
+            if pg==1:
+                pghits+=1
+            elif pg==-1:
+                pgmiss+=1
+        print('areas: ', ars)
+        print('hits and miss: ',pghits, pgmiss)
+#[0.025, 0.05, 0.1, 0.2]
 
 elif args.method == 'gradcam':
     # Transforms needs to be applied to our data set
@@ -312,12 +411,13 @@ elif args.method == 'ig':
         start = time.time()
         attributions = ig.attribute(x, target=labele)
         #saliency = torch.mean(attributions, 1,keepdim=True)
+        attributions = torch.abs(attributions)
         saliency,_ = torch.max(attributions, 1,keepdim=True)
 
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
-        z = saliency, labele, bbname
+        z = torch.squeeze(saliency).cpu().numpy(), labele, bbname
         lslb.append(z)
         l.append(tm)
         #saliency = miscel.normlze(saliency)
@@ -338,8 +438,7 @@ elif args.method == 'rise':
 
     # Rise initialization 
     explainer = RISE(model, (224, 224), 100)
-    explainer.generate_masks(N=8000, s=7, p1=0.5, savepath='masks.npy')
-
+    explainer.generate_masks(N=7500, s=4, p1=0.5, savepath='masks.npy')
     # number of images we need to calculate things for
     nimg = vall.selection
     with torch.no_grad():
@@ -372,8 +471,134 @@ elif args.method == 'rise':
                 pgmiss+=1
             del saliency
             del sal
-    
+elif args.method == 'riser':
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])])    
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+    nmasks = [1000, 1500, 2000, 3000,3500, 4000, 5000, 5500, 6000, 7000,7500, 8000, 9000, 10000]
+    ssze = [3, 4,5,6,7,8,9]
+    with torch.no_grad():
+        for nmsk in nmasks:
+            for ssz in ssze:
+                pghits = 0
+                pgmiss = 0
+                # Rise initialization 
+                explainer = RISE(model, (224, 224),100)
+                explainer.generate_masks(N=nmsk, s=ssz, p1=0.5, savepath='masks.npy')
 
+                # number of images we need to calculate things for
+                nimg = vall.selection
+
+                for i in nimg:
+                    img, labele = vall[i]
+                    bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+                    imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+                    xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+                    x = img.unsqueeze(0)
+                    x = x.cuda()
+                    saliency = explainer(x)
+
+                    sal = saliency[labele].cpu().numpy()
+                    
+                    #saliency = miscel.normlze(saliency)
+                    xloc,yloc = miscel.camfindloc(sal)
+                    Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+                    pg = test.evaluate(Y, (yloc,xloc))
+                    if pg==1:
+                        pghits+=1
+                    elif pg==-1:
+                        pgmiss+=1
+                    del sal
+                    del saliency
+                print('number of mask and kernSize: ', nmsk, ssz)
+                print('Pointing game accuracy: ',pghits/(pghits+pgmiss))
+elif args.method == 'lie':
+
+    def get_preprocess_transform():
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])     
+        transf = transforms.Compose([
+            transforms.ToTensor(),
+            normalize
+        ])    
+
+        return transf
+
+    preprocess_transform = get_preprocess_transform()
+
+    def batch_predict(images):
+        batch = torch.stack(tuple(preprocess_transform(i) for i in images), dim=0)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+        batch = batch.to(device)
+        
+        logits = model(batch)
+        probs = F.softmax(logits, dim=1)
+        return probs.detach().cpu().numpy()
+
+
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224))])    
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+    seg = [10, 20, 30, 40]
+    for j in seg:
+        pghits = 0
+        pgmiss = 0
+        # Method
+        explainer = lime_image.LimeImageExplainer()
+        slic_parameters = {'n_segments': j,
+                    'compactness': 10,
+                    'sigma': 3}
+        segmenter = SegmentationAlgorithm('slic', **slic_parameters)
+
+        # number of images we need to calculate things for
+        nimg = vall.selection
+        for i in nimg:
+            img, labele = vall[i]
+            bbname = vall.get_image_url(i).split("/")[-1].split(".")[0]             # Extracting image url to retrieve its BB
+            imwidth, imheight, xmin, ymin, xmax, ymax = miscel.bbinfo(bbname, bdta)
+            xminn, yminn, xmaxn, ymaxn = miscel.newloc(imwidth, imheight, xmin, ymin, xmax, ymax)
+
+            start = time.time()
+            explanation = explainer.explain_instance(np.array(img), 
+                                                    batch_predict, # classification function
+                                                    labels = (labele,),
+                                                    hide_color=0,
+                                                    segmentation_fn=segmenter,
+                                                    top_labels= None,  
+                                                    num_samples=1000,progress_bar=False)
+            sgments = explanation.segments
+            hetmap = np.zeros(sgments.shape)
+            local_exp = explanation.local_exp
+            locexp = local_exp[labele]
+
+            for i, (seg_idx, seg_val) in enumerate(locexp):
+                hetmap[sgments == seg_idx] = seg_val
+
+            end = time.time()
+            tm = end - start
+            ttotal = ttotal + tm
+            z = hetmap, labele, bbname
+            lslb.append(z)
+            l.append(tm)
+            xcen = int(np.floor((xmaxn+xminn)/2))
+            ycen = int(np.floor((ymaxn+yminn)/2))
+            pgalt = hetmap[ycen, xcen]==hetmap.max()
+            #saliency = miscel.normlze(saliency)
+            xloc,yloc = miscel.camfindloc(hetmap)
+            Y = miscel.gtbb(xminn, yminn, xmaxn, ymaxn)
+            pg = test.evaluate(Y, (yloc,xloc))
+            if pg==1 or pgalt:
+                pghits+=1
+            else:
+                pgmiss+=1
+        print('number of segments: ', j)
+        print('Pointing game accuracy: ',pghits/(pghits+pgmiss))
+    
 elif args.method == 'lime':
 
     def get_preprocess_transform():
@@ -407,7 +632,7 @@ elif args.method == 'lime':
 
     # Method
     explainer = lime_image.LimeImageExplainer()
-    slic_parameters = {'n_segments': 50,
+    slic_parameters = {'n_segments': 30,
                    'compactness': 10,
                    'sigma': 3}
     segmenter = SegmentationAlgorithm('slic', **slic_parameters)
@@ -489,12 +714,14 @@ elif args.method == 'shap':
         start = time.time()
         shap_values,_ = e.shap_values(x, ranked_outputs=c+1, nsamples=100)
         d = torch.from_numpy(shap_values[-1])
+        dd = torch.abs(d)
+
         #saliency = torch.mean(d, 1,keepdim=True)
-        saliency,_ = torch.max(d, 1,keepdim=True)
+        saliency,_ = torch.max(dd, 1,keepdim=True)
         end = time.time()
         tm = end - start
         ttotal = ttotal + tm
-        z = saliency, labele, bbname
+        z = torch.squeeze(saliency).cpu().numpy(), labele, bbname
         lslb.append(z)
         l.append(tm)
         #saliency = miscel.normlze(saliency)
@@ -506,9 +733,9 @@ elif args.method == 'shap':
         elif pg==-1:
             pgmiss+=1
 
-torch.save(lslb, '/media/mallet/Haniye/cams/'+args.method +args.model+args.data+str(args.mpiteration)+'sal.pt')
+torch.save(lslb, '/media/mallet/Haniye/cams/'+args.method + '-'+args.model+ '-'+args.data+'-optim.pt')
 #l = np.asarray(l)     
-#savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'.csv', l, delimiter=',')
+#savetxt('/home/mallet/Desktop/Dataa/Runtimes/time'+args.method+args.model+args.data+'optimized.csv', l, delimiter=',')
 print('Pointing game accuracy: ',pghits/(pghits+pgmiss))
 print('Total time: ',ttotal)
 print('hits and misses: ', pghits, pgmiss)

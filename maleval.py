@@ -31,9 +31,9 @@ from scipy.stats.stats import pearsonr
 
 cudnn.benchmark = True
 
-model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr']
-method_options = ['gradient', 'mp','ep', 'gradcam', 'rise','ig', 'rise', 'lime','shap','riser']
-data_options = ['rnddata', 'rsnt', 'ggl', 'alx', 'subalx', 'subrsnt', 'subggl']
+model_options = ['resnet50', 'resnet50r', 'googlenet', 'googlenetr','vgg16', 'alexnet', 'alexnetr','densenet','mobile', 'densenetr','mobiler']
+method_options = ['gradient', 'mp','ep', 'gradcam', 'rise','ig', 'rise', 'lime','shap','riser', 'cam']
+data_options = ['rnddata', 'rsnt', 'ggl', 'alx', 'subalx', 'subrsnt', 'subggl','mbl','dens']
 
 parser = argparse.ArgumentParser(description='CNN')
 parser.add_argument('--model', '-a', default='resnet50',  choices=model_options)
@@ -50,7 +50,24 @@ if args.model == 'alexnetr':
     model = alx.alexr()
     model.eval()
     target_layer = model.model.features[11]
-
+elif args.model == 'densenet':
+    model = alx.loaddens()
+    target_layers = [model.features[-1]]
+    modulll = model._modules.get('features')
+    params = list(model.parameters())
+    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+elif args.model == 'densenetr':
+    model = alx.loaddensr()
+    target_layers = [model.model.model.features[-1]]
+    modulll = model._modules.get('model')._modules.get('model')._modules.get('features')
+    params = list(model.parameters())
+    weight_softmax = np.squeeze(params[-2].cpu().data.numpy())
+elif args.model == 'mobile':
+    model = alx.loadmob()
+    target_layers = [model.features[18]]
+elif args.model == 'mobiler':
+    model = alx.loadmobr()
+    target_layers = [model.model.model.features[18]]
 else:
     print('Error: please choose a valid model')
 
@@ -64,7 +81,12 @@ elif args.data == 'alx':
 elif args.data == 'subalx':
     dta = '/home/mallet/Desktop/Dataa/subalx/valid'
     bdta = '/home/mallet/Desktop/Dataa/subalx/val/'
-
+elif args.data == 'mbl':
+    dta = '/home/mallet/Desktop/Dataa/mbl/valid'
+    bdta = '/home/mallet/Desktop/Dataa/mbl/val/'
+elif args.data == 'dens':
+    dta = '/home/mallet/Desktop/Dataa/dens/valid'
+    bdta = '/home/mallet/Desktop/Dataa/dens/val/'
 else:
     print('Error: please choose a valid data')
 
@@ -212,7 +234,33 @@ elif args.method == 'gradcam':
         delvals.append(auc(deleti))
         inservals.append(auc(inseri))
         
-
+elif args.method == 'cam':
+    # Transforms needs to be applied to our data set
+    val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])  
+    # 2000 images randomly taken from Imagenet(ILSVRC2012) validation set
+    vall = torchray.benchmark.datasets.ImageFolder(dta,transform = val_transforms)
+    # number of images we need to calculate things for
+    nimg = vall.selection
+    for i in nimg:
+        img, labele = vall[i]
+        yy = img.unsqueeze(0)
+        y = yy.cuda()
+        prob = model(y)
+        conf, predicted = torch.max(prob, 1)
+        confid.append(conf.item())
+        features_blobs = []
+        def hook_feature(module, input, output):
+            features_blobs.append(output.data.cpu().numpy())
+        modulll.register_forward_hook(hook_feature)
+        logit = model(y)
+        cammask = miscel.bCAM(features_blobs[0], weight_softmax, labele)
+        saliency = cv2.resize(cammask, (224, 224))
+        saliency = miscel.normlze(saliency)
+        deleti = deletion.single_run(yy, saliency)
+        inseri = insertion.single_run(yy, saliency)
+        delvals.append(auc(deleti))
+        inservals.append(auc(inseri))
+        
 elif args.method == 'ig':
     # Transforms needs to be applied to our data set
     val_transforms = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor()])    

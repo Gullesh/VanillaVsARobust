@@ -13,6 +13,7 @@ use_cuda = torch.cuda.is_available()
 
 # load models
 
+
 def loadgoogle():
     model = models.googlenet(pretrained=True)
     #model = nn.Sequential(model, nn.Softmax(dim=1))
@@ -23,6 +24,7 @@ def loadgoogle():
     for p in model.parameters():
         p.requires_grad = False
 
+        
     return model
 def loadvgg():
     model = models.vgg16(pretrained=True)
@@ -62,7 +64,7 @@ def loadAlexnet():
 
 def loadResnetR():
     model = load_madry_model(arch='madry', if_pre=1, my_attacker=True)
-    model.eval()
+    model.model.eval()
     if use_cuda:
         model.cuda()
 
